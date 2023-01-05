@@ -23,6 +23,15 @@ const int slider_3v3_pin = 13;
 const int slider_pin = 14;
 const int slider_ain = 0;
 const int slider_max = 1024;
+// battery voltage sense input
+// 12k/3k on vbatt = 0.2 of full scale
+// 1024 @ 3300mV*(0.2) => 16500mV
+const int vbatt_pin = 18;
+const int vbatt_ain = 4;
+const int vbatt_to_mv_num = 16500;
+const int vbatt_to_mv_den = 1024;
+const int vbatt_brownout_low = 9900;
+const int vbatt_brownout_high = 10500;
 // pwm / servo output
 const int pwm_servo_pin = 17;
 const int pwm_servo_max = 180;  // 0~180 deg
@@ -41,6 +50,8 @@ int g_blink_ms = 0;
 int r_on = 0;
 int g_on = 0;
 unsigned long last_blink_change_ms = 0;
+unsigned long vbatt_mv = 0;
+int vbatt_brownout = 1;
 
 
 // the setup routine runs once when you press reset:
@@ -60,6 +71,8 @@ void setup() {
   pinMode(slider_pin, INPUT);
   pinMode(slider_3v3_pin, OUTPUT);
   digitalWrite(slider_3v3_pin, HIGH);
+  // setup battery voltage sense
+  pinMode(vbatt_pin, INPUT);
   // setup servo library
   pwm_servo.attach(pwm_servo_pin);
   pwm_servo.write(slider_angle);
@@ -73,6 +86,16 @@ void setup() {
 void loop() {
   const int pwm_servo_half = (pwm_servo_max / 2);
   const int blink_ms_range = blink_ms_max - blink_ms_min;
+
+  // read battery voltage sense
+  vbatt_mv = analogRead(vbatt_ain);
+  vbatt_mv = (vbatt_mv * vbatt_to_mv_num) / vbatt_to_mv_den;
+  if (vbatt_mv >= vbatt_brownout_high) {
+    vbatt_brownout = 0;
+  }
+  if (vbatt_mv < vbatt_brownout_low) {
+    vbatt_brownout = 1;
+  }
   
   // read slider to get angle
   slider_val = analogRead(slider_ain);
@@ -80,10 +103,14 @@ void loop() {
   if (slider_angle >= pwm_servo_half - pwm_servo_dband &&
       slider_angle <= pwm_servo_half + pwm_servo_dband) {
     // default back to middle if in deadband
-    slider_angle = pwm_servo_max / 2;
+    slider_angle = pwm_servo_half;
   }
   
   // set pwm servo output
+  if (vbatt_brownout) {
+    // default to middle if in brownout
+    slider_angle = pwm_servo_half;
+  }
   pwm_servo.write(slider_angle);
   
   // calculate new led pattern
@@ -100,6 +127,9 @@ void loop() {
     g_blink_ms = (slider_angle_abs * blink_ms_range) / pwm_servo_half;
     g_blink_ms = blink_ms_max - g_blink_ms;  // invert: slower at center
     r_blink_ms = 0;
+  }
+  else if (vbatt_brownout) {
+    r_blink_ms = blink_ms_min / 4;
   }
   else {
     // no blink
