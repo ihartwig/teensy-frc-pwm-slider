@@ -23,34 +23,38 @@ const int slider_3v3_pin = 13;
 const int slider_pin = 14;
 const int slider_ain = 0;
 const int slider_max = 1024;
+const int slider_half = slider_max/2;
+const int slider_dband = 25;  // ignore +/- from center
 // battery voltage sense input
-// 12k/3k on vbatt = 0.2 of full scale
-// 1024 @ 3300mV*(0.2) => 16500mV
+// 12k/2.7k on vbatt = 0.2 of full scale
+// 1024 @ 3300mV*(14.7/2.7) => 17967mV
 const int vbatt_pin = 18;
 const int vbatt_ain = 4;
-const int vbatt_to_mv_num = 16500;
+const int vbatt_to_mv_num = 17967;
 const int vbatt_to_mv_den = 1024;
 const int vbatt_brownout_low = 9900;
-const int vbatt_brownout_high = 10500;
+const int vbatt_brownout_high = 11700;
 // pwm / servo output
-const int pwm_servo_pin = 17;
-const int pwm_servo_max = 180;  // 0~180 deg
-const int pwm_servo_dband = 5;  // ignore +/- from center
+const int pwm_out_pin = 17;
+const int pwm_out_max = 180;  // 0~180 deg
+const int pwm_out_min = 4;
+const int pwm_out_center = ((pwm_out_max-pwm_out_min)/2) + pwm_out_min;
 // blink timing
 const int blink_ms_min = 100;  // fast blink for max / min angle
 const int blink_ms_max = 500;  // slow blink near center
+const int blink_ms_range = blink_ms_max - blink_ms_min;
 const int blink_pin_mode[] = {INPUT, INPUT_PULLUP};
 
 // loop state variables
 int slider_val = slider_max / 2;
-int slider_angle = pwm_servo_max / 2;
-Servo pwm_servo;
+Servo pwm_out;
+int pwm_out_angle = pwm_out_center;
 int r_blink_ms = 0;
 int g_blink_ms = 0;
 int r_on = 0;
 int g_on = 0;
 unsigned long last_blink_change_ms = 0;
-unsigned long vbatt_mv = 0;
+unsigned long vbatt_mv = 0;  // needs to be long to hold scaling factor
 int vbatt_brownout = 1;
 
 
@@ -74,8 +78,8 @@ void setup() {
   // setup battery voltage sense
   pinMode(vbatt_pin, INPUT);
   // setup servo library
-  pwm_servo.attach(pwm_servo_pin);
-  pwm_servo.write(slider_angle);
+  pwm_out.attach(pwm_out_pin);
+  pwm_out.write(pwm_out_angle);
   // debug
 //  Serial.begin(1000000);
 //  Serial.println("hello, world!");
@@ -84,9 +88,6 @@ void setup() {
 
 // the loop routine runs over and over again forever:
 void loop() {
-  const int pwm_servo_half = (pwm_servo_max / 2);
-  const int blink_ms_range = blink_ms_max - blink_ms_min;
-
   // read battery voltage sense
   vbatt_mv = analogRead(vbatt_ain);
   vbatt_mv = (vbatt_mv * vbatt_to_mv_num) / vbatt_to_mv_den;
@@ -99,32 +100,34 @@ void loop() {
   
   // read slider to get angle
   slider_val = analogRead(slider_ain);
-  slider_angle = (slider_val * pwm_servo_max) / slider_max;
-  if (slider_angle >= pwm_servo_half - pwm_servo_dband &&
-      slider_angle <= pwm_servo_half + pwm_servo_dband) {
+  if (slider_val >= slider_half - slider_dband &&
+      slider_val <= slider_half + slider_dband) {
     // default back to middle if in deadband
-    slider_angle = pwm_servo_half;
+    pwm_out_angle = pwm_out_center;
   }
-  
-  // set pwm servo output
+  else {
+    pwm_out_angle = (slider_val * pwm_out_max) / slider_max;
+  }
+  // and adjust for brownout condition
   if (vbatt_brownout) {
     // default to middle if in brownout
-    slider_angle = pwm_servo_half;
+    pwm_out_angle = pwm_out_center;
   }
-  pwm_servo.write(slider_angle);
+  // set pwm servo output
+  pwm_out.write(pwm_out_angle);
   
   // calculate new led pattern
-  if (slider_angle < pwm_servo_half) {
+  if (pwm_out_angle < pwm_out_center) {
     // backwards: red blink slow to fast
-    int slider_angle_abs = pwm_servo_half - slider_angle;
-    r_blink_ms = (slider_angle_abs * blink_ms_range) / pwm_servo_half;
+    int pwm_out_angle_abs = pwm_out_center - pwm_out_angle;
+    r_blink_ms = (pwm_out_angle_abs * blink_ms_range) / pwm_out_center;
     r_blink_ms = blink_ms_max - r_blink_ms;  // invert: slower at center
     g_blink_ms = 0;
   }
-  else if (slider_angle > pwm_servo_half) {
+  else if (pwm_out_angle > pwm_out_center) {
     // forwards: green blink slow to fast
-    int slider_angle_abs = slider_angle - pwm_servo_half;
-    g_blink_ms = (slider_angle_abs * blink_ms_range) / pwm_servo_half;
+    int pwm_out_angle_abs = pwm_out_angle - pwm_out_center;
+    g_blink_ms = (pwm_out_angle_abs * blink_ms_range) / pwm_out_center;
     g_blink_ms = blink_ms_max - g_blink_ms;  // invert: slower at center
     r_blink_ms = 0;
   }
