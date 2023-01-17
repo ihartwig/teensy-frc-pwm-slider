@@ -22,7 +22,7 @@ const int r_pin = 7;
 const int slider_3v3_pin = 13;
 const int slider_pin = 14;
 const int slider_ain = 0;
-const int slider_max = 1024;
+const int slider_max = 1000;  // theoretically 1024
 const int slider_half = slider_max/2;
 const int slider_dband = 25;  // ignore +/- from center
 // battery voltage sense input
@@ -33,12 +33,15 @@ const int vbatt_ain = 4;
 const int vbatt_to_mv_num = 17967;
 const int vbatt_to_mv_den = 1024;
 const int vbatt_brownout_low = 9900;
-const int vbatt_brownout_high = 11700;
+const int vbatt_brownout_high = 11100;
+const int vbatt_sample_every_ms = 100;
+const int vbatt_sample_cnt = 5;
 // pwm / servo output
 const int pwm_out_pin = 17;
-const int pwm_out_max = 180;  // 0~180 deg
-const int pwm_out_min = 4;
-const int pwm_out_center = ((pwm_out_max-pwm_out_min)/2) + pwm_out_min;
+const int pwm_out_max = 172;  // 0~180 deg
+const int pwm_out_min = 16;    // Falcon doesn't seem to need these steps
+const int pwm_out_range = pwm_out_max-pwm_out_min;
+const int pwm_out_center = (pwm_out_range/2) + pwm_out_min;
 // blink timing
 const int blink_ms_min = 100;  // fast blink for max / min angle
 const int blink_ms_max = 500;  // slow blink near center
@@ -53,13 +56,24 @@ int r_blink_ms = 0;
 int g_blink_ms = 0;
 int r_on = 0;
 int g_on = 0;
+unsigned long now_ms = 0;
 unsigned long last_blink_change_ms = 0;
 unsigned long vbatt_mv = 0;  // needs to be long to hold scaling factor
+unsigned long vbatt_sum = 0;
 int vbatt_brownout = 1;
+int vbatt_samples[vbatt_sample_cnt] = {0};
+int vbatt_sample_i = 0;
+unsigned long vbatt_sample_last_ms = 0;
 
 
 // the setup routine runs once when you press reset:
 void setup() {
+  // pre-fill the vbatt sample buffer
+  // to be right on the edge of brownout
+  for (int i = 0; i < vbatt_sample_cnt; i++) {
+    vbatt_samples[i] = vbatt_brownout_low;
+  }
+  vbatt_sum = (unsigned long)vbatt_brownout_low * vbatt_sample_cnt;
   // initialize the digital pin as an output.
   pinMode(led_pin, OUTPUT);
   // setup rgb LED to be off and common 
@@ -88,14 +102,32 @@ void setup() {
 
 // the loop routine runs over and over again forever:
 void loop() {
-  // read battery voltage sense
-  vbatt_mv = analogRead(vbatt_ain);
-  vbatt_mv = (vbatt_mv * vbatt_to_mv_num) / vbatt_to_mv_den;
-  if (vbatt_mv >= vbatt_brownout_high) {
-    vbatt_brownout = 0;
-  }
-  if (vbatt_mv < vbatt_brownout_low) {
-    vbatt_brownout = 1;
+  now_ms = millis();
+  if (vbatt_sample_last_ms + vbatt_sample_every_ms < now_ms) {
+    // read battery voltage sense
+    vbatt_mv = analogRead(vbatt_ain);
+    vbatt_mv = (vbatt_mv * vbatt_to_mv_num) / vbatt_to_mv_den;
+    // running sum of the samples - sub first then add
+    vbatt_sum -= vbatt_samples[vbatt_sample_i];
+    vbatt_samples[vbatt_sample_i] = vbatt_mv;
+    vbatt_sum += vbatt_mv;
+    vbatt_sample_i++;
+    vbatt_sample_i %= vbatt_sample_cnt;
+    // and compare the sum to a sum threshold
+    if (vbatt_sum >= (unsigned long)vbatt_brownout_high * vbatt_sample_cnt) {
+      vbatt_brownout = 0;
+    }
+    if (vbatt_sum < (unsigned long)vbatt_brownout_low * vbatt_sample_cnt) {
+      vbatt_brownout = 1;
+    }
+    vbatt_sample_last_ms = now_ms;
+    // debug
+//    Serial.print("vbatt_sample_i: ");
+//    Serial.print(vbatt_sample_i);
+//    Serial.print(", vbatt_mv: ");
+//    Serial.print(vbatt_mv);
+//    Serial.print(", vbatt_sum: ");
+//    Serial.println(vbatt_sum);
   }
   
   // read slider to get angle
@@ -106,7 +138,8 @@ void loop() {
     pwm_out_angle = pwm_out_center;
   }
   else {
-    pwm_out_angle = (slider_val * pwm_out_max) / slider_max;
+    pwm_out_angle = (slider_val * pwm_out_range) / slider_max;
+    pwm_out_angle += pwm_out_min;
   }
   // and adjust for brownout condition
   if (vbatt_brownout) {
@@ -141,7 +174,7 @@ void loop() {
   }
   
   // turn on or off leds as needed
-  unsigned long now_ms = millis();
+  now_ms = millis();
   if (r_blink_ms == 0) {
     r_on = 0;
     pinMode(r_pin, INPUT);
@@ -165,8 +198,8 @@ void loop() {
   // debug
 //  Serial.print("slider_val: ");
 //  Serial.print(slider_val);
-//  Serial.print(", slider_angle: ");
-//  Serial.print(slider_angle);
+//  Serial.print(", pwm_out_angle: ");
+//  Serial.print(pwm_out_angle);
 //  Serial.print(", r_blink_ms: ");
 //  Serial.print(r_blink_ms);
 //  Serial.print(", g_blink_ms: ");
